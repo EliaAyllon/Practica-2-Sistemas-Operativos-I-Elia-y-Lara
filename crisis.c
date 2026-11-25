@@ -38,67 +38,66 @@ static pid_t hijos[MAX_PROCS];    /* PIDs de nuestras filiales vivas (0 = hueco)
 /* ------------------------------------------------------------------ */
 
 /* Imprime "L(pid)\n" con un unico write (L es V o M) */
-static void imprimir_evento(char letra, pid_t pid)
-{
-    char buf[32];
+static void imprimir_evento(char letra, pid_t pid){
+    char texto[32];
     char digitos[16];
     int n = 0;
     int i = 0;
-    long v = pid;
+    long numero = pid;
 
-    if (v == 0)
+    if (numero == 0){
         digitos[n++] = '0';
-    while (v > 0) {                 /* sacamos los digitos al reves */
-        digitos[n++] = '0' + v % 10;
-        v = v / 10;
     }
-    buf[i++] = letra;
-    buf[i++] = '(';
-    while (n > 0)                   /* y los ponemos en orden */
-        buf[i++] = digitos[--n];
-    buf[i++] = ')';
-    buf[i++] = '\n';
-    write(1, buf, i);
+        
+    while (numero > 0) {                 /* sacamos los digitos al reves */
+        digitos[n++] = '0' + numero % 10;
+        numero = numero / 10;
+    }
+    texto[i++] = letra;
+    texto[i++] = '(';
+    while (n > 0){
+        texto[i++] = digitos[--n];
+    }                  /* y los ponemos en orden */
+        
+    texto[i++] = ')';
+    texto[i++] = '\n';
+    write(1, texto, i);
 }
 
 /* Compara dos cadenas: devuelve 1 si son iguales y 0 si no */
-static int iguales(const char *a, const char *b)
-{
+static int iguales(const char *cadena1, const char *cadena2){
     int i = 0;
 
-    while (a[i] != '\0' && b[i] != '\0') {
-        if (a[i] != b[i])
+    while (cadena1[i] != '\0' && cadena2[i] != '\0') {
+        if (cadena1[i] != cadena2[i]){
             return 0;
+        }
         i++;
     }
-    return a[i] == b[i];
+    return cadena1[i] == cadena2[i];
 }
 
 /* Duerme n segundos completos aunque lleguen señales por el camino */
-static void dormir(int n)
-{
-    while (n > 0)
-        n = sleep(n);
+static void dormir(int segundos){
+    while (segundos > 0)
+        segundos = sleep(segundos);
 }
 
 /* Bloquea el fichero entero (el puntero se pone antes al principio.
  * Es seguro porque cada proceso tiene su propio descriptor). */
-static void bloquear(void)
-{
+static void bloquear(void){
     lseek(fd, 0, SEEK_SET);
     lockf(fd, F_LOCK, 0);
 }
 
 /* Desbloquea el fichero entero */
-static void desbloquear(void)
-{
+static void desbloquear(void){
     lseek(fd, 0, SEEK_SET);
     lockf(fd, F_ULOCK, 0);
 }
 
 /* Lee los dos enteros del fichero (hay que tenerlo bloqueado) */
-static void leer_datos(int datos[2])
-{
+static void leer_datos(int datos[2]){
     lseek(fd, 0, SEEK_SET);
     read(fd, datos, 2 * sizeof(int));
 }
@@ -112,13 +111,12 @@ static void escribir_datos(int datos[2])
 
 /* Resta uno al numero de procesos vivos. Solo se llama desde
  * manejadoras o con las señales bloqueadas. */
-static void decrementar_vivos(void)
-{
+static void decrementar_vivos(void){
     int datos[2];
 
     bloquear();
     leer_datos(datos);
-    datos[1]--;
+    datos[1]--; // resta a los procesos  vivos
     escribir_datos(datos);
     desbloquear();
 }
@@ -129,8 +127,7 @@ static void decrementar_vivos(void)
 
 /* SIGCHLD: una filial ha muerto. La recogemos (sin quedarnos zombie),
  * la quitamos de la lista y liberamos su hueco en el fichero. */
-static void manejadora_sigchld(int sig)
-{
+static void manejadora_sigchld(int sig){
     int estado;
     pid_t pid;
     int i;
@@ -146,8 +143,7 @@ static void manejadora_sigchld(int sig)
 /* SIGTERM (solo filiales): la empresa quiebra, y con ella todas sus
  * descendientes. Mandamos SIGTERM a las filiales, esperamos a que
  * mueran todas, imprimimos M y morimos. */
-static void manejadora_sigterm(int sig)
-{
+static void manejadora_sigterm(int sig){
     int estado;
     int i;
 
@@ -164,8 +160,7 @@ static void manejadora_sigterm(int sig)
 }
 
 /* SIGINT (solo padre): fin ordenado de la practica (CTRL-C) */
-static void manejadora_sigint(int sig)
-{
+static void manejadora_sigint(int sig){
     int estado;
     int i;
     static const char fin[] = "Programa acabado correctamente\n";
@@ -191,8 +186,7 @@ static void manejadora_sigint(int sig)
 /* Intenta crear una filial. Si hay hueco, reserva su sitio en el
  * fichero y hace fork. Si somos el hijo, deja preparado su estado y
  * vuelve (el hijo continuara en el mismo bucle principal). */
-static void crear_filial(void)
-{
+static void crear_filial(void){
     sigset_t bloqueo, viejo;
     int datos[2];
     int puede = 0;
@@ -274,8 +268,7 @@ static void crear_filial(void)
 /* Programa principal                                                  */
 /* ------------------------------------------------------------------ */
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]){
     static const char uso[] = "Uso: crisis n_max_procs [normal|veloz]\n";
     static const char error_num[] = "n_max_procs debe ser un entero entre 3 y 34\n";
     static const char error_vel[] = "La velocidad debe ser normal o veloz\n";
