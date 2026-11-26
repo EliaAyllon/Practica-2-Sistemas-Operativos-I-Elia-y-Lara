@@ -133,9 +133,11 @@ static void manejadora_sigchld(int sig){
     int i;
 
     while ((pid = waitpid(-1, &estado, WNOHANG)) > 0) {
-        for (i = 0; i < MAX_PROCS; i++)
-            if (hijos[i] == pid)
+        for (i = 0; i < MAX_PROCS; i++){
+            if (hijos[i] == pid){
                 hijos[i] = 0;
+            }
+        }
         decrementar_vivos();
     }
 }
@@ -147,14 +149,16 @@ static void manejadora_sigterm(int sig){
     int estado;
     int i;
 
-    for (i = 0; i < MAX_PROCS; i++)
-        if (hijos[i] != 0)
+    for (i = 0; i < MAX_PROCS; i++){
+        if (hijos[i] != 0){
             kill(hijos[i], SIGTERM);
+        }
+    } 
 
     /* Esperamos a todas las filiales (y liberamos sus huecos) */
-    while (waitpid(-1, &estado, 0) > 0)
+    while (waitpid(-1, &estado, 0) > 0){
         decrementar_vivos();
-
+    }
     imprimir_evento('M', getpid());
     exit(0);
 }
@@ -170,8 +174,7 @@ static void manejadora_sigint(int sig){
             kill(hijos[i], SIGTERM);
 
     /* Esperamos a que hayan muerto todas las empresas */
-    while (waitpid(-1, &estado, 0) > 0)
-        ;
+    while (waitpid(-1, &estado, 0) > 0){};
 
     write(1, fin, sizeof(fin) - 1);
     close(fd);
@@ -187,12 +190,12 @@ static void manejadora_sigint(int sig){
  * fichero y hace fork. Si somos el hijo, deja preparado su estado y
  * vuelve (el hijo continuara en el mismo bucle principal). */
 static void crear_filial(void){
-    sigset_t bloqueo, viejo;
+    sigset_t bloqueo, anterior;
     int datos[2];
-    int puede = 0;
+    int espacio_libre = 0;
     pid_t pid;
     int i;
-    struct sigaction accion;
+    struct sigaction configurar_senal;
 
     /* Bloqueamos señales mientras comprobamos, hacemos fork y apuntamos
      * el PID, para que ninguna manejadora se meta a medias. */
@@ -200,7 +203,7 @@ static void crear_filial(void){
     sigaddset(&bloqueo, SIGINT);
     sigaddset(&bloqueo, SIGTERM);
     sigaddset(&bloqueo, SIGCHLD);
-    sigprocmask(SIG_BLOCK, &bloqueo, &viejo);
+    sigprocmask(SIG_BLOCK, &bloqueo, &anterior);
 
     /* Zona critica: comprobar si cabe otro proceso y reservar el hueco */
     bloquear();
@@ -208,12 +211,12 @@ static void crear_filial(void){
     if (datos[1] < datos[0]) {
         datos[1]++;
         escribir_datos(datos);
-        puede = 1;
+        espacio_libre = 1;
     }
     desbloquear();
 
-    if (!puede) {                   /* no cabe: no creamos nada */
-        sigprocmask(SIG_SETMASK, &viejo, NULL);
+    if (!espacio_libre) {                   /* no cabe: no creamos nada */
+        sigprocmask(SIG_SETMASK, &anterior, NULL);
         return;
     }
 
@@ -221,15 +224,16 @@ static void crear_filial(void){
 
     if (pid == -1) {                /* fallo del fork: devolvemos el hueco */
         decrementar_vivos();
-        sigprocmask(SIG_SETMASK, &viejo, NULL);
+        sigprocmask(SIG_SETMASK, &anterior, NULL);
         return;
     }
 
     if (pid == 0) {
         /* ---- Codigo del hijo ---- */
         soy_padre = 0;
-        for (i = 0; i < MAX_PROCS; i++)   /* no heredamos las filiales del padre */
+        for (i = 0; i < MAX_PROCS; i++){
             hijos[i] = 0;
+        }   /* no heredamos las filiales del padre */
         srand(getpid());                  /* semilla distinta en cada proceso */
         imprimir_evento('V', getpid());   /* nada mas nacer */
 
@@ -237,20 +241,20 @@ static void crear_filial(void){
         fd = open(FICHERO, O_RDWR);       /* y lo abrimos de nuevo (sin O_TRUNC) */
 
         /* SIGTERM: quiebra con sus descendientes */
-        accion.sa_handler = manejadora_sigterm;
-        sigemptyset(&accion.sa_mask);
-        sigaddset(&accion.sa_mask, SIGINT);
-        sigaddset(&accion.sa_mask, SIGCHLD);
-        accion.sa_flags = 0;
-        sigaction(SIGTERM, &accion, NULL);
+        configurar_senal.sa_handler = manejadora_sigterm;
+        sigemptyset(&configurar_senal.sa_mask);
+        sigaddset(&configurar_senal.sa_mask, SIGINT);
+        sigaddset(&configurar_senal.sa_mask, SIGCHLD);
+        configurar_senal.sa_flags = 0;
+        sigaction(SIGTERM, &configurar_senal, NULL);
 
         /* SIGINT: lo ignoramos, el CTRL-C lo gestiona el padre */
-        accion.sa_handler = SIG_IGN;
-        sigemptyset(&accion.sa_mask);
-        accion.sa_flags = 0;
-        sigaction(SIGINT, &accion, NULL);
+        configurar_senal.sa_handler = SIG_IGN;
+        sigemptyset(&configurar_senal.sa_mask);
+        configurar_senal.sa_flags = 0;
+        sigaction(SIGINT, &configurar_senal, NULL);
 
-        sigprocmask(SIG_SETMASK, &viejo, NULL);
+        sigprocmask(SIG_SETMASK, &anterior, NULL);
         return;
     }
 
@@ -261,7 +265,7 @@ static void crear_filial(void){
             break;
         }
     }
-    sigprocmask(SIG_SETMASK, &viejo, NULL);
+    sigprocmask(SIG_SETMASK, &anterior, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -272,11 +276,11 @@ int main(int argc, char *argv[]){
     static const char uso[] = "Uso: crisis n_max_procs [normal|veloz]\n";
     static const char error_num[] = "n_max_procs debe ser un entero entre 3 y 34\n";
     static const char error_vel[] = "La velocidad debe ser normal o veloz\n";
-    int n_max = 0;
+    int max_procesos = 0;
     int veloz = 0;
     int i;
     int datos[2];
-    struct sigaction accion;
+    struct sigaction configurar_senal;
 
     /* --- Comprobacion de argumentos --- */
     if (argc != 2 && argc != 3) {
@@ -290,13 +294,13 @@ int main(int argc, char *argv[]){
         exit(1);
     }
     for (i = 0; argv[1][i] != '\0'; i++) {
-        if (argv[1][i] < '0' || argv[1][i] > '9' || n_max > MAX_PROCS) {
+        if (argv[1][i] < '0' || argv[1][i] > '9' || max_procesos > MAX_PROCS) {
             write(2, error_num, sizeof(error_num) - 1);
             exit(1);
         }
-        n_max = n_max * 10 + (argv[1][i] - '0');
+        max_procesos = max_procesos * 10 + (argv[1][i] - '0');
     }
-    if (n_max < 3 || n_max > MAX_PROCS) {
+    if (max_procesos < 3 || max_procesos > MAX_PROCS) {
         write(2, error_num, sizeof(error_num) - 1);
         exit(1);
     }
@@ -315,29 +319,30 @@ int main(int argc, char *argv[]){
     fd = open(FICHERO, O_CREAT | O_RDWR | O_TRUNC, 0600);
     if (fd == -1)
         exit(1);
-    datos[0] = n_max;
+    datos[0] = max_procesos;
     datos[1] = 1;                   /* el padre ya cuenta */
     escribir_datos(datos);
 
-    for (i = 0; i < MAX_PROCS; i++)
+    for (i = 0; i < MAX_PROCS; i++){
         hijos[i] = 0;
+    }
 
     srand(getpid());
 
     /* --- Manejadoras del padre (los hijos heredan SIGCHLD) --- */
-    accion.sa_handler = manejadora_sigchld;
-    sigemptyset(&accion.sa_mask);
-    sigaddset(&accion.sa_mask, SIGINT);
-    sigaddset(&accion.sa_mask, SIGTERM);
-    accion.sa_flags = 0;
-    sigaction(SIGCHLD, &accion, NULL);
+    configurar_senal.sa_handler = manejadora_sigchld;
+    sigemptyset(&configurar_senal.sa_mask);
+    sigaddset(&configurar_senal.sa_mask, SIGINT);
+    sigaddset(&configurar_senal.sa_mask, SIGTERM);
+    configurar_senal.sa_flags = 0;
+    sigaction(SIGCHLD, &configurar_senal, NULL);
 
-    accion.sa_handler = manejadora_sigint;
-    sigemptyset(&accion.sa_mask);
-    sigaddset(&accion.sa_mask, SIGCHLD);
-    sigaddset(&accion.sa_mask, SIGTERM);
-    accion.sa_flags = 0;
-    sigaction(SIGINT, &accion, NULL);
+    configurar_senal.sa_handler = manejadora_sigint;
+    sigemptyset(&configurar_senal.sa_mask);
+    sigaddset(&configurar_senal.sa_mask, SIGCHLD);
+    sigaddset(&configurar_senal.sa_mask, SIGTERM);
+    configurar_senal.sa_flags = 0;
+    sigaction(SIGINT, &configurar_senal, NULL);
 
     /* --- Bucle infinito de la vida de cada empresa --- */
     for (;;) {
