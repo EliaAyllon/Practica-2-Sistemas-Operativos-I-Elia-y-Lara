@@ -1,23 +1,3 @@
-/*
- * Practica 2 de Sistemas Operativos I: crisis.c
- * Simulacion de una empresa matriz (padre) con filiales (hijos, nietos...)
- *
- * Uso: crisis n_max_procs [normal|veloz]
- *
- * Notas de diseno:
- *  - El fichero compartido "crisis.dat" guarda dos enteros:
- *        datos[0] = numero maximo de procesos
- *        datos[1] = numero de procesos vivos (incluido el padre)
- *  - El contador se INCREMENTA antes del fork (reservamos el hueco) y se
- *    DECREMENTA cuando el padre de la empresa muerta hace wait. Asi nunca
- *    se libera un hueco hasta estar seguros de que el proceso ha muerto.
- *  - Toda la zona critica (leer/modificar el fichero) se hace con lockf y
- *    con las señales bloqueadas, para que una manejadora no se cuele en
- *    medio.
- *  - Solo el padre imprime V/M para las filiales; el padre no imprime nada
- *    al nacer ni al morir salvo el mensaje final.
- */
-
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -28,16 +8,10 @@
 #define FICHERO "crisis.dat"
 #define MAX_PROCS 34
 
-/* Variables estaticas (las necesitan las manejadoras) */
-static int fd;                    /* descriptor del fichero compartido */
-static int soy_padre = 1;         /* 1 si somos la empresa matriz */
-static pid_t hijos[MAX_PROCS];    /* PIDs de nuestras filiales vivas (0 = hueco) */
+static int fd;                 
+static int soy_padre = 1;         
+static pid_t hijos[MAX_PROCS];    
 
-/* ------------------------------------------------------------------ */
-/* Funciones auxiliares sencillas                                      */
-/* ------------------------------------------------------------------ */
-
-/* Imprime "L(pid)\n" con un unico write (L es V o M) */
 static void imprimir_evento(char letra, pid_t pid){
     char texto[32];
     char digitos[16];
@@ -49,7 +23,7 @@ static void imprimir_evento(char letra, pid_t pid){
         digitos[n++] = '0';
     }
         
-    while (numero > 0) {                 /* sacamos los digitos al reves */
+    while (numero > 0) {                
         digitos[n++] = '0' + numero % 10;
         numero = numero / 10;
     }
@@ -57,14 +31,13 @@ static void imprimir_evento(char letra, pid_t pid){
     texto[i++] = '(';
     while (n > 0){
         texto[i++] = digitos[--n];
-    }                  /* y los ponemos en orden */
+    }                  
         
     texto[i++] = ')';
     texto[i++] = '\n';
     write(1, texto, i);
 }
 
-/* Compara dos cadenas: devuelve 1 si son iguales y 0 si no */
 static int iguales(const char *cadena1, const char *cadena2){
     int i = 0;
 
@@ -77,56 +50,42 @@ static int iguales(const char *cadena1, const char *cadena2){
     return cadena1[i] == cadena2[i];
 }
 
-/* Duerme n segundos completos aunque lleguen señales por el camino */
 static void dormir(int segundos){
     while (segundos > 0)
         segundos = sleep(segundos);
 }
 
-/* Bloquea el fichero entero (el puntero se pone antes al principio.
- * Es seguro porque cada proceso tiene su propio descriptor). */
 static void bloquear(void){
     lseek(fd, 0, SEEK_SET);
     lockf(fd, F_LOCK, 0);
 }
 
-/* Desbloquea el fichero entero */
 static void desbloquear(void){
     lseek(fd, 0, SEEK_SET);
     lockf(fd, F_ULOCK, 0);
 }
 
-/* Lee los dos enteros del fichero (hay que tenerlo bloqueado) */
 static void leer_datos(int datos[2]){
     lseek(fd, 0, SEEK_SET);
     read(fd, datos, 2 * sizeof(int));
 }
 
-/* Escribe los dos enteros en el fichero (hay que tenerlo bloqueado) */
 static void escribir_datos(int datos[2])
 {
     lseek(fd, 0, SEEK_SET);
     write(fd, datos, 2 * sizeof(int));
 }
 
-/* Resta uno al numero de procesos vivos. Solo se llama desde
- * manejadoras o con las señales bloqueadas. */
 static void decrementar_vivos(void){
     int datos[2];
 
     bloquear();
     leer_datos(datos);
-    datos[1]--; // resta a los procesos  vivos
+    datos[1]--; 
     escribir_datos(datos);
     desbloquear();
 }
 
-/* ------------------------------------------------------------------ */
-/* Manejadoras de señales                                              */
-/* ------------------------------------------------------------------ */
-
-/* SIGCHLD: una filial ha muerto. La recogemos (sin quedarnos zombie),
- * la quitamos de la lista y liberamos su hueco en el fichero. */
 static void manejadora_sigchld(int sig){
     int estado;
     pid_t pid;
@@ -142,9 +101,6 @@ static void manejadora_sigchld(int sig){
     }
 }
 
-/* SIGTERM (solo filiales): la empresa quiebra, y con ella todas sus
- * descendientes. Mandamos SIGTERM a las filiales, esperamos a que
- * mueran todas, imprimimos M y morimos. */
 static void manejadora_sigterm(int sig){
     int estado;
     int i;
@@ -155,7 +111,6 @@ static void manejadora_sigterm(int sig){
         }
     } 
 
-    /* Esperamos a todas las filiales (y liberamos sus huecos) */
     while (waitpid(-1, &estado, 0) > 0){
         decrementar_vivos();
     }
@@ -163,7 +118,6 @@ static void manejadora_sigterm(int sig){
     exit(0);
 }
 
-/* SIGINT (solo padre): fin ordenado de la practica (CTRL-C) */
 static void manejadora_sigint(int sig){
     int estado;
     int i;
@@ -173,22 +127,14 @@ static void manejadora_sigint(int sig){
         if (hijos[i] != 0)
             kill(hijos[i], SIGTERM);
 
-    /* Esperamos a que hayan muerto todas las empresas */
     while (waitpid(-1, &estado, 0) > 0){};
 
     write(1, fin, sizeof(fin) - 1);
     close(fd);
-    unlink(FICHERO);                /* borramos el fichero temporal */
+    unlink(FICHERO);               
     exit(0);
 }
 
-/* ------------------------------------------------------------------ */
-/* Creacion de una filial                                              */
-/* ------------------------------------------------------------------ */
-
-/* Intenta crear una filial. Si hay hueco, reserva su sitio en el
- * fichero y hace fork. Si somos el hijo, deja preparado su estado y
- * vuelve (el hijo continuara en el mismo bucle principal). */
 static void crear_filial(void){
     sigset_t bloqueo, anterior;
     int datos[2];
@@ -197,15 +143,12 @@ static void crear_filial(void){
     int i;
     struct sigaction configurar_senal;
 
-    /* Bloqueamos señales mientras comprobamos, hacemos fork y apuntamos
-     * el PID, para que ninguna manejadora se meta a medias. */
     sigemptyset(&bloqueo);
     sigaddset(&bloqueo, SIGINT);
     sigaddset(&bloqueo, SIGTERM);
     sigaddset(&bloqueo, SIGCHLD);
     sigprocmask(SIG_BLOCK, &bloqueo, &anterior);
 
-    /* Zona critica: comprobar si cabe otro proceso y reservar el hueco */
     bloquear();
     leer_datos(datos);
     if (datos[1] < datos[0]) {
@@ -215,14 +158,14 @@ static void crear_filial(void){
     }
     desbloquear();
 
-    if (!espacio_libre) {                   /* no cabe: no creamos nada */
+    if (!espacio_libre) {                  
         sigprocmask(SIG_SETMASK, &anterior, NULL);
         return;
     }
 
     pid = fork();
 
-    if (pid == -1) {                /* fallo del fork: devolvemos el hueco */
+    if (pid == -1) {         
         decrementar_vivos();
         sigprocmask(SIG_SETMASK, &anterior, NULL);
         return;
@@ -233,14 +176,14 @@ static void crear_filial(void){
         soy_padre = 0;
         for (i = 0; i < MAX_PROCS; i++){
             hijos[i] = 0;
-        }   /* no heredamos las filiales del padre */
-        srand(getpid());                  /* semilla distinta en cada proceso */
-        imprimir_evento('V', getpid());   /* nada mas nacer */
+        }   
+        srand(getpid());               
+        imprimir_evento('V', getpid());  
 
-        close(fd);                        /* cerramos el descriptor heredado */
-        fd = open(FICHERO, O_RDWR);       /* y lo abrimos de nuevo (sin O_TRUNC) */
+        close(fd);                       
+        fd = open(FICHERO, O_RDWR);      
 
-        /* SIGTERM: quiebra con sus descendientes */
+     
         configurar_senal.sa_handler = manejadora_sigterm;
         sigemptyset(&configurar_senal.sa_mask);
         sigaddset(&configurar_senal.sa_mask, SIGINT);
@@ -248,7 +191,6 @@ static void crear_filial(void){
         configurar_senal.sa_flags = 0;
         sigaction(SIGTERM, &configurar_senal, NULL);
 
-        /* SIGINT: lo ignoramos, el CTRL-C lo gestiona el padre */
         configurar_senal.sa_handler = SIG_IGN;
         sigemptyset(&configurar_senal.sa_mask);
         configurar_senal.sa_flags = 0;
@@ -258,7 +200,6 @@ static void crear_filial(void){
         return;
     }
 
-    /* ---- Codigo del padre: apuntamos el PID de la filial ---- */
     for (i = 0; i < MAX_PROCS; i++) {
         if (hijos[i] == 0) {
             hijos[i] = pid;
@@ -267,10 +208,6 @@ static void crear_filial(void){
     }
     sigprocmask(SIG_SETMASK, &anterior, NULL);
 }
-
-/* ------------------------------------------------------------------ */
-/* Programa principal                                                  */
-/* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[]){
     static const char uso[] = "Uso: crisis n_max_procs [normal|veloz]\n";
@@ -282,13 +219,11 @@ int main(int argc, char *argv[]){
     int datos[2];
     struct sigaction configurar_senal;
 
-    /* --- Comprobacion de argumentos --- */
     if (argc != 2 && argc != 3) {
         write(2, uso, sizeof(uso) - 1);
         exit(1);
     }
 
-    /* Convertimos el primer argumento a entero a mano */
     if (argv[1][0] == '\0') {
         write(2, error_num, sizeof(error_num) - 1);
         exit(1);
@@ -305,7 +240,6 @@ int main(int argc, char *argv[]){
         exit(1);
     }
 
-    /* Segundo argumento (opcional) */
     if (argc == 3) {
         if (iguales(argv[2], "veloz"))
             veloz = 1;
@@ -315,12 +249,11 @@ int main(int argc, char *argv[]){
         }
     }
 
-    /* --- Fichero compartido: maximo y numero de vivos (solo el padre) --- */
     fd = open(FICHERO, O_CREAT | O_RDWR | O_TRUNC, 0600);
     if (fd == -1)
         exit(1);
     datos[0] = max_procesos;
-    datos[1] = 1;                   /* el padre ya cuenta */
+    datos[1] = 1;                   
     escribir_datos(datos);
 
     for (i = 0; i < MAX_PROCS; i++){
@@ -329,7 +262,6 @@ int main(int argc, char *argv[]){
 
     srand(getpid());
 
-    /* --- Manejadoras del padre (los hijos heredan SIGCHLD) --- */
     configurar_senal.sa_handler = manejadora_sigchld;
     sigemptyset(&configurar_senal.sa_mask);
     sigaddset(&configurar_senal.sa_mask, SIGINT);
@@ -344,23 +276,18 @@ int main(int argc, char *argv[]){
     configurar_senal.sa_flags = 0;
     sigaction(SIGINT, &configurar_senal, NULL);
 
-    /* --- Bucle infinito de la vida de cada empresa --- */
     for (;;) {
-        /* 1. Pausa al azar entre 1 y 4 segundos (solo en modo normal) */
         if (!veloz)
             dormir(1 + rand() % 4);
 
         if (soy_padre) {
-            /* 2. La matriz intenta crear una filial */
             crear_filial();
         } else {
-            /* 3. Una filial: 50% quiebra, 50% crea otra filial */
             if (rand() % 2 == 0)
-                raise(SIGTERM);     /* quiebra: la manejadora hace el resto */
+                raise(SIGTERM);    
             else
                 crear_filial();
         }
-        /* 5. Si no se pudo crear, volvemos a empezar el bucle */
     }
 
     return 0;
